@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore GBRMonsterHunter.slnx
+
+      - name: Install Dalamud dev files
+        shell: pwsh
+        run: |
+          $hooks = Join-Path $env:APPDATA "XIVLauncher/addon/Hooks/dev"
+          New-Item -ItemType Directory -Force -Path $hooks | Out-Null
+          Invoke-WebRequest -UseBasicParsing "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "$env:RUNNER_TEMP/dalamud.zip"
+          Expand-Archive "$env:RUNNER_TEMP/dalamud.zip" -DestinationPath $hooks -Force
+
+      - name: Build plugin package
+        run: dotnet build GBRMonsterHunter/GBRMonsterHunter.csproj --configuration Release --no-restore
+
+      - name: Locate Dalamud package
+        id: package
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem -Path GBRMonsterHunter -Recurse -Filter latest.zip | Select-Object -First 1
+          if (-not $zip) {
+            throw "DalamudPackager did not produce latest.zip"
+          }
+          $asset = Join-Path $env:RUNNER_TEMP "GBRMonsterHunter-latest.zip"
+          Copy-Item $zip.FullName $asset -Force
+          "zip=$asset" >> $env:GITHUB_OUTPUT
+
+      - name: Publish release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.zip }}
+          name: GBR Monster Hunter ${{ github.ref_name || 'manual' }}
+          tag_name: ${{ github.ref_name || 'manual-build' }}
+          make_latest: true
