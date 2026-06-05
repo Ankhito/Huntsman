@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Reflection;
 using System.Text.Json;
 using Lumina.Excel;
 using Lumina.Excel.Sheets;
@@ -15,6 +16,10 @@ internal sealed class DropLocationProvider(PluginServices services)
 
     private Dictionary<uint, DropItemInfo>? dropsByItemId;
     private HashSet<uint>? knownDropItemIds;
+    private Type? gatherBuddyMobDropInfoCacheType;
+    private MethodInfo? gatherBuddyGetDropInfoForItem;
+    private MethodInfo? gatherBuddyIsKnownDropItem;
+    private MethodInfo? gatherBuddyEnsureInitializeStarted;
 
     private sealed record MobDropOverrides
     {
@@ -42,15 +47,157 @@ internal sealed class DropLocationProvider(PluginServices services)
 
     public DropItemInfo GetDropInfo(uint itemId)
     {
+        if (TryGetGatherBuddyDropInfo(itemId, out var gatherBuddyInfo) && gatherBuddyInfo.Mobs.Count > 0)
+            return gatherBuddyInfo;
+
         EnsureBuilt();
         return dropsByItemId!.TryGetValue(itemId, out var info) ? info : DropItemInfo.Empty;
     }
 
     public bool IsKnownDrop(uint itemId)
     {
+        if (TryIsGatherBuddyKnownDrop(itemId, out var known) && known)
+            return true;
+
         EnsureBuilt();
         return knownDropItemIds!.Contains(itemId);
     }
+
+    private bool TryIsGatherBuddyKnownDrop(uint itemId, out bool known)
+    {
+        known = false;
+        if (!EnsureGatherBuddyMobDropBindings())
+            return false;
+
+        try
+        {
+            gatherBuddyEnsureInitializeStarted?.Invoke(null, null);
+            known = gatherBuddyIsKnownDropItem?.Invoke(null, [itemId]) as bool? ?? false;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            services.Log.Debug($"Failed to read GatherBuddy mob-drop known state: {ex.GetBaseException().Message}");
+            return false;
+        }
+    }
+
+    private bool TryGetGatherBuddyDropInfo(uint itemId, out DropItemInfo info)
+    {
+        info = DropItemInfo.Empty;
+        if (!EnsureGatherBuddyMobDropBindings())
+            return false;
+
+        try
+        {
+            gatherBuddyEnsureInitializeStarted?.Invoke(null, null);
+            var dropInfo = gatherBuddyGetDropInfoForItem?.Invoke(null, [itemId]);
+            if (dropInfo == null)
+                return false;
+
+            info = ConvertGatherBuddyDropInfo(dropInfo);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            services.Log.Debug($"Failed to read GatherBuddy mob-drop locations: {ex.GetBaseException().Message}");
+            return false;
+        }
+    }
+
+    private bool EnsureGatherBuddyMobDropBindings()
+    {
+        if (gatherBuddyMobDropInfoCacheType != null)
+            return gatherBuddyGetDropInfoForItem != null;
+
+        var assembly = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(assembly => string.Equals(assembly.GetName().Name, "GatherBuddyReborn", StringComparison.OrdinalIgnoreCase))
+            ?? AppDomain.CurrentDomain.GetAssemblies()
+                .FirstOrDefault(assembly => assembly.GetType("GatherBuddy.Crafting.MobDropInfoCache") != null);
+        gatherBuddyMobDropInfoCacheType = assembly?.GetType("GatherBuddy.Crafting.MobDropInfoCache");
+        gatherBuddyGetDropInfoForItem = gatherBuddyMobDropInfoCacheType?.GetMethod("GetDropInfoForItem", BindingFlags.Public | BindingFlags.Static, [typeof(uint)]);
+        gatherBuddyIsKnownDropItem = gatherBuddyMobDropInfoCacheType?.GetMethod("IsKnownDropItem", BindingFlags.Public | BindingFlags.Static, [typeof(uint)]);
+        gatherBuddyEnsureInitializeStarted = gatherBuddyMobDropInfoCacheType?.GetMethod("EnsureInitializeStarted", BindingFlags.Public | BindingFlags.Static, Type.EmptyTypes);
+        return gatherBuddyGetDropInfoForItem != null;
+    }
+
+    private static DropItemInfo ConvertGatherBuddyDropInfo(object dropInfo)
+    {
+        var mobsObject = dropInfo.GetType().GetProperty("Mobs")?.GetValue(dropInfo);
+        if (mobsObject is not System.Collections.IEnumerable mobsEnumerable)
+            return DropItemInfo.Empty;
+
+        var mobs = new List<DropMobInfo>();
+        foreach (var mobObject in mobsEnumerable)
+        {
+            var mobType = mobObject.GetType();
+            var bNpcNameId = ReadUInt(mobType.GetProperty("BNpcNameId")?.GetValue(mobObject));
+            var mobName = mobType.GetProperty("MobName")?.GetValue(mobObject) as string ?? string.Empty;
+            var zonesObject = mobType.GetProperty("Zones")?.GetValue(mobObject);
+            if (string.IsNullOrWhiteSpace(mobName) || zonesObject is not System.Collections.IEnumerable zonesEnumerable)
+                continue;
+
+            var zones = new List<DropZoneInfo>();
+            foreach (var zoneObject in zonesEnumerable)
+            {
+                var zoneType = zoneObject.GetType();
+                var zoneName = zoneType.GetProperty("ZoneName")?.GetValue(zoneObject) as string ?? UnknownZoneName;
+                var territoryTypeId = ReadUInt(zoneType.GetProperty("TerritoryTypeId")?.GetValue(zoneObject));
+                var clustersObject = zoneType.GetProperty("Clusters")?.GetValue(zoneObject);
+                if (clustersObject is not System.Collections.IEnumerable clustersEnumerable)
+                    continue;
+
+                var clusters = new List<DropClusterInfo>();
+                foreach (var clusterObject in clustersEnumerable)
+                {
+                    var clusterType = clusterObject.GetType();
+                    clusters.Add(new DropClusterInfo(
+                        ReadUInt(clusterType.GetProperty("TerritoryTypeId")?.GetValue(clusterObject)),
+                        ReadUInt(clusterType.GetProperty("MapRowId")?.GetValue(clusterObject)),
+                        ReadFloat(clusterType.GetProperty("MapX")?.GetValue(clusterObject)),
+                        ReadFloat(clusterType.GetProperty("MapY")?.GetValue(clusterObject)),
+                        ReadInt(clusterType.GetProperty("SpawnPointCount")?.GetValue(clusterObject))));
+                }
+
+                if (clusters.Count > 0)
+                    zones.Add(new DropZoneInfo(zoneName, territoryTypeId, clusters));
+            }
+
+            if (zones.Count > 0)
+                mobs.Add(new DropMobInfo(bNpcNameId, mobName, zones));
+        }
+
+        return mobs.Count == 0 ? DropItemInfo.Empty : new DropItemInfo(mobs);
+    }
+
+    private static uint ReadUInt(object? value) => value switch
+    {
+        uint typed => typed,
+        int typed and >= 0 => (uint)typed,
+        ushort typed => typed,
+        short typed and >= 0 => (uint)typed,
+        byte typed => typed,
+        _ => 0,
+    };
+
+    private static int ReadInt(object? value) => value switch
+    {
+        int typed => typed,
+        uint typed and <= int.MaxValue => (int)typed,
+        ushort typed => typed,
+        short typed => typed,
+        byte typed => typed,
+        _ => 0,
+    };
+
+    private static float ReadFloat(object? value) => value switch
+    {
+        float typed => typed,
+        double typed => (float)typed,
+        int typed => typed,
+        uint typed => typed,
+        _ => 0f,
+    };
 
     private void EnsureBuilt()
     {
@@ -315,7 +462,16 @@ internal sealed class DropLocationProvider(PluginServices services)
               "bNpcNameId": 281
             }
           ],
-          "addedDrops": [],
+          "addedDrops": [
+            {
+              "itemId": 5345,
+              "bNpcNameId": 480
+            },
+            {
+              "itemId": 5345,
+              "bNpcNameId": 1753
+            }
+          ],
           "spawns": [
             { "bNpcNameId": 480, "territoryTypeId": 153, "mapX": 26.1, "mapY": 20.1 },
             { "bNpcNameId": 1753, "territoryTypeId": 155, "mapX": 25.621801, "mapY": 25.663221 },

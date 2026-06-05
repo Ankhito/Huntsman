@@ -177,21 +177,114 @@ internal sealed class VulcanReflectionAdapter(PluginServices services)
         var listId = (int)(type.GetProperty("ListId")?.GetValue(plan) ?? -1);
         var listName = (string?)type.GetProperty("ListName")?.GetValue(plan) ?? "Vulcan Plan";
         var version = (int)(type.GetProperty("Version")?.GetValue(plan) ?? 0);
-        var materialsObject = type.GetProperty("MaterialsView")?.GetValue(plan);
         var materials = new Dictionary<uint, int>();
 
-        if (materialsObject is System.Collections.IEnumerable enumerable)
-        {
-            foreach (var entry in enumerable)
-            {
-                var entryType = entry.GetType();
-                var key = entryType.GetProperty("Key")?.GetValue(entry);
-                var value = entryType.GetProperty("Value")?.GetValue(entry);
-                if (key is uint itemId && value is int quantity && quantity > 0)
-                    materials[itemId] = quantity;
-            }
-        }
+        AddMaterialCounts(type.GetProperty("MaterialsView")?.GetValue(plan), materials);
+        AddMaterialCounts(type.GetProperty("IngredientDemandsView")?.GetValue(plan), materials);
 
         return new VulcanExecutionPlanSnapshot(listId, listName, version, materials);
+    }
+
+    private static void AddMaterialCounts(object? materialsObject, IDictionary<uint, int> materials)
+    {
+        if (materialsObject is not System.Collections.IEnumerable enumerable)
+            return;
+
+        foreach (var entry in enumerable)
+        {
+            if (!TryReadMaterialEntry(entry, out var itemId, out var quantity) || quantity <= 0)
+                continue;
+
+            materials[itemId] = Math.Max(materials.TryGetValue(itemId, out var current) ? current : 0, quantity);
+        }
+    }
+
+    private static bool TryReadMaterialEntry(object entry, out uint itemId, out int quantity)
+    {
+        itemId = 0;
+        quantity = 0;
+        var entryType = entry.GetType();
+        var key = entryType.GetProperty("Key")?.GetValue(entry);
+        var value = entryType.GetProperty("Value")?.GetValue(entry);
+        if (TryReadItemId(key, out itemId))
+        {
+            if (TryReadQuantity(value, out quantity))
+                return true;
+
+            quantity = ReadBestQuantityFromObject(value);
+            return quantity > 0;
+        }
+
+        itemId = ReadBestItemIdFromObject(entry);
+        quantity = ReadBestQuantityFromObject(entry);
+        return itemId != 0 && quantity > 0;
+    }
+
+    private static uint ReadBestItemIdFromObject(object? value)
+    {
+        if (value == null)
+            return 0;
+
+        foreach (var name in new[] { "ItemId", "ItemID", "Item", "Material", "Ingredient" })
+        {
+            var propertyValue = value.GetType().GetProperty(name)?.GetValue(value);
+            if (TryReadItemId(propertyValue, out var itemId))
+                return itemId;
+        }
+
+        return 0;
+    }
+
+    private static int ReadBestQuantityFromObject(object? value)
+    {
+        if (value == null)
+            return 0;
+
+        foreach (var name in new[] { "Missing", "MissingQuantity", "Needed", "Required", "RequiredQuantity", "Total", "TotalNeeded", "Quantity", "Count", "Amount" })
+        {
+            var propertyValue = value.GetType().GetProperty(name)?.GetValue(value);
+            if (TryReadQuantity(propertyValue, out var quantity) && quantity > 0)
+                return quantity;
+        }
+
+        return 0;
+    }
+
+    private static bool TryReadItemId(object? value, out uint itemId)
+    {
+        itemId = value switch
+        {
+            uint typed => typed,
+            int typed and >= 0 => (uint)typed,
+            ushort typed => typed,
+            short typed and >= 0 => (uint)typed,
+            byte typed => typed,
+            _ => 0,
+        };
+        if (itemId != 0)
+            return true;
+
+        var rowId = value?.GetType().GetProperty("RowId")?.GetValue(value);
+        itemId = rowId switch
+        {
+            uint typed => typed,
+            int typed and >= 0 => (uint)typed,
+            _ => 0,
+        };
+        return itemId != 0;
+    }
+
+    private static bool TryReadQuantity(object? value, out int quantity)
+    {
+        quantity = value switch
+        {
+            int typed => typed,
+            uint typed and <= int.MaxValue => (int)typed,
+            short typed => typed,
+            ushort typed => typed,
+            byte typed => typed,
+            _ => 0,
+        };
+        return quantity > 0;
     }
 }

@@ -12,7 +12,7 @@ internal sealed class MainWindow
     private readonly GatherBuddyRebornIpc gbr;
     private readonly LifestreamIpc lifestream;
     private readonly VnavmeshIpc vnavmesh;
-    private readonly RotationSolverRebornIpc rotationSolver;
+    private readonly RotationDriverService rotationDriver;
     private readonly MonsterNavigator monsterNavigator;
     private readonly DropHuntListManager dropHuntList;
     private readonly VulcanDropAutomation automation;
@@ -23,7 +23,7 @@ internal sealed class MainWindow
         GatherBuddyRebornIpc gbr,
         LifestreamIpc lifestream,
         VnavmeshIpc vnavmesh,
-        RotationSolverRebornIpc rotationSolver,
+        RotationDriverService rotationDriver,
         MonsterNavigator monsterNavigator,
         DropHuntListManager dropHuntList,
         VulcanDropAutomation automation,
@@ -33,7 +33,7 @@ internal sealed class MainWindow
         this.gbr = gbr;
         this.lifestream = lifestream;
         this.vnavmesh = vnavmesh;
-        this.rotationSolver = rotationSolver;
+        this.rotationDriver = rotationDriver;
         this.monsterNavigator = monsterNavigator;
         this.dropHuntList = dropHuntList;
         this.automation = automation;
@@ -42,7 +42,7 @@ internal sealed class MainWindow
 
     public bool IsOpen { get; set; }
 
-    public void Dispose() => rotationSolver.Dispose();
+    public void Dispose() => rotationDriver.Dispose();
 
     public void Update()
     {
@@ -61,11 +61,11 @@ internal sealed class MainWindow
         gbr.RefreshAvailability();
         lifestream.RefreshAvailability();
         vnavmesh.RefreshAvailability();
-        rotationSolver.RefreshAvailability();
+        rotationDriver.RefreshAvailability();
     }
 
     public string BuildStatusLine() =>
-        $"GBRMonsterHunter: Vulcan={automation.CurrentPlanName} ({automation.StatusText}), GBR={gbr.Available} ({gbr.LastError ?? gbr.GetStatus()}), Lifestream={lifestream.Available} ({lifestream.LastError ?? "ok"}), vnavmesh={vnavmesh.Available} ({vnavmesh.LastError ?? "ok"}), RSR={rotationSolver.Available} ({rotationSolver.LastError ?? "ok"}), MonsterNav={monsterNavigator.State} ({monsterNavigator.StatusText})";
+        $"GBRMonsterHunter: Vulcan={automation.CurrentPlanName} ({automation.StatusText}), GBR={gbr.Available} ({gbr.LastError ?? gbr.GetStatus()}), Lifestream={lifestream.Available} ({lifestream.LastError ?? "ok"}), vnavmesh={vnavmesh.Available} ({vnavmesh.LastError ?? "ok"}), Rotation={rotationDriver.Available} ({rotationDriver.StatusDetail}), MonsterNav={monsterNavigator.State} ({monsterNavigator.StatusText})";
 
     public void RouteActiveDropTarget() => automation.RouteActive();
 
@@ -103,11 +103,12 @@ internal sealed class MainWindow
         ImGui.TextUnformatted($"Vulcan queue: {automation.QueueState}");
         ImGui.TextUnformatted($"Automation: {automation.StatusText}");
         DrawCombatJobSelector();
+        DrawRotationDriverSelector();
         ImGui.TextUnformatted($"Combat job: {automation.CombatJobStatus}");
         DrawStatusLine("GBR", gbr.Available, gbr.Available ? $"IPC v{gbr.GetVersion()}: {gbr.GetStatus()}" : gbr.LastError);
         DrawStatusLine("Lifestream", lifestream.Available, lifestream.Available ? $"busy={lifestream.IsBusy()}" : lifestream.LastError);
         DrawStatusLine("vnavmesh", vnavmesh.Available, vnavmesh.Available ? $"ready={vnavmesh.IsReady()}, moving={vnavmesh.IsNavigating()}" : vnavmesh.LastError);
-        DrawStatusLine("RSR", rotationSolver.Available, rotationSolver.Available ? "ready" : rotationSolver.LastError);
+        DrawStatusLine("Rotation", rotationDriver.Available, rotationDriver.StatusDetail);
         DrawStatusLine("Monster nav", monsterNavigator.State != MonsterNavigationState.Failed, monsterNavigator.StatusText);
     }
 
@@ -130,6 +131,25 @@ internal sealed class MainWindow
 
             config.CombatClassJobId = job.ClassJobId;
             config.Save();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawRotationDriverSelector()
+    {
+        var selectedLabel = GetRotationDriverLabel(config.RotationDriver);
+        if (!ImGui.BeginCombo("Rotation driver", selectedLabel))
+            return;
+
+        foreach (var driver in Enum.GetValues<RotationDriverKind>())
+        {
+            if (!ImGui.Selectable(GetRotationDriverLabel(driver), config.RotationDriver == driver))
+                continue;
+
+            config.RotationDriver = driver;
+            config.Save();
+            rotationDriver.RefreshAvailability();
         }
 
         ImGui.EndCombo();
@@ -178,4 +198,10 @@ internal sealed class MainWindow
     {
         ImGui.TextUnformatted($"{name}: {(available ? "ready" : "missing")} ({detail ?? "ok"})");
     }
+
+    private static string GetRotationDriverLabel(RotationDriverKind driver) => driver switch
+    {
+        RotationDriverKind.WrathCombo => "WrathCombo",
+        _ => "RotationSolverReborn",
+    };
 }

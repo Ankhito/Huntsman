@@ -19,7 +19,7 @@ internal sealed class MonsterNavigator(
     Configuration config,
     LifestreamIpc lifestream,
     VnavmeshIpc vnavmesh,
-    RotationSolverRebornIpc rotationSolver,
+    RotationDriverService rotationDriver,
     CommandBridge commands,
     MonsterRoutePlanner planner)
 {
@@ -63,7 +63,7 @@ internal sealed class MonsterNavigator(
     {
         lifestream.Abort();
         vnavmesh.Stop();
-        rotationSolver.ResumeCombat();
+        rotationDriver.ResumeCombat();
         target = null;
         route = null;
         teleportAttempted = false;
@@ -180,12 +180,12 @@ internal sealed class MonsterNavigator(
             vnavmesh.Stop();
             if (TrySelectHuntedTarget())
             {
-                rotationSolver.RefreshAvailability();
-                if (rotationSolver.Available)
-                    rotationSolver.SetManualMode();
+                var driverReady = rotationDriver.PrepareForCombat();
 
                 State = MonsterNavigationState.Arrived;
-                StatusText = $"Targeted {target!.MobName}; RSR manual mode requested.";
+                StatusText = driverReady
+                    ? $"Targeted {target!.MobName}; {rotationDriver.DriverName} combat driver ready."
+                    : $"Targeted {target!.MobName}; combat driver unavailable ({rotationDriver.LastError ?? rotationDriver.StatusDetail}).";
             }
             else
             {

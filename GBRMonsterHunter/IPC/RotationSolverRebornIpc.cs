@@ -3,7 +3,7 @@ using LuminaAction = Lumina.Excel.Sheets.Action;
 
 namespace GBRMonsterHunter.IPC;
 
-internal sealed class RotationSolverRebornIpc : IpcAdapterBase, IDisposable
+internal sealed class RotationSolverRebornIpc : IpcAdapterBase, IRotationDriver, IDisposable
 {
     private const byte SpecialEnd = 0;
     private const byte SpecialNoCasting = 13;
@@ -32,6 +32,8 @@ internal sealed class RotationSolverRebornIpc : IpcAdapterBase, IDisposable
     public string? EventLastError { get; private set; }
     public uint LatestNextGcdActionId { get; private set; }
     public uint LatestNextActionId { get; private set; }
+    public string DriverName => "RSR";
+    public string StatusDetail => Available ? "ready" : LastError ?? "missing";
     public string LatestNextGcdActionName => GetActionName(LatestNextGcdActionId);
     public string LatestNextActionName => GetActionName(LatestNextActionId);
 
@@ -52,6 +54,8 @@ internal sealed class RotationSolverRebornIpc : IpcAdapterBase, IDisposable
             : TryAction(nameof(PauseCombat), () => triggerSpecial.InvokeAction(SpecialNoCasting));
 
     public bool ResumeCombat() => TryAction(nameof(ResumeCombat), () => triggerSpecial.InvokeAction(SpecialEnd));
+
+    public bool PrepareForCombat() => SetManualMode();
 
     public bool SetManualMode() => TryAction(nameof(SetManualMode), () => changeOperatingMode.InvokeAction(StateManual));
 
