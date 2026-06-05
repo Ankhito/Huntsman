@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  SEKHMETPLUGINS_DISPATCH_TOKEN: ${{ secrets.SEKHMETPLUGINS_DISPATCH_TOKEN }}
+
 jobs:
   build-release:
     runs-on: windows-latest
@@ -55,3 +58,19 @@ jobs:
           name: GBR Monster Hunter ${{ github.ref_name || 'manual' }}
           tag_name: ${{ github.ref_name || 'manual-build' }}
           make_latest: true
+
+      - name: Dispatch pluginmaster update
+        if: ${{ env.SEKHMETPLUGINS_DISPATCH_TOKEN != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ env.SEKHMETPLUGINS_DISPATCH_TOKEN }}
+        run: |
+          $payload = @{
+            event_type = "update-pluginmaster"
+            client_payload = @{
+              repository = "${{ github.repository }}"
+              tag = "${{ github.ref_name }}"
+            }
+          } | ConvertTo-Json -Compress
+
+          $payload | gh api repos/SekhmetAnkh/SekhmetPlugins/dispatches --method POST --input -
