@@ -14,7 +14,10 @@ internal sealed record DropHuntListItem(
 
     public DropHuntListItem Refresh() => this with { Owned = InventoryCounter.Count(ItemId) };
 
-    public MonsterLocation? GetBestLocation(uint currentTerritoryTypeId = 0)
+    public MonsterLocation? GetBestLocation(uint currentTerritoryTypeId = 0) =>
+        GetCandidateLocations(currentTerritoryTypeId).FirstOrDefault();
+
+    public IReadOnlyList<MonsterLocation> GetCandidateLocations(uint currentTerritoryTypeId = 0)
     {
         var candidates = new List<(MonsterLocation Location, int SpawnPointCount, bool SameTerritory, string ZoneName)>();
 
@@ -48,6 +51,15 @@ internal sealed record DropHuntListItem(
             .ThenBy(candidate => candidate.Location.MapX)
             .ThenBy(candidate => candidate.Location.MapY)
             .Select(candidate => candidate.Location)
-            .FirstOrDefault();
+            .DistinctBy(location => new
+            {
+                location.MobName,
+                location.TerritoryTypeId,
+                location.MapRowId,
+                location.MapX,
+                location.MapY,
+                location.BNpcNameId,
+            })
+            .ToList();
     }
 }
