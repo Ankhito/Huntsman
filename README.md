@@ -1,16 +1,24 @@
 # GBR Monster Hunter
 
-GBR Monster Hunter is a Dalamud plugin that bridges GatherBuddy Reborn and Vulcan-style crafting plans. It detects missing drop-only materials, waits for gathering work to finish, equips a selected combat job, routes to the relevant monster, and resumes the crafting automation flow after the hunt step.
+GBR Monster Hunter is a Dalamud plugin that bridges GatherBuddy Reborn and Vulcan-style crafting plans. It detects missing drop-only materials, waits for gathering work to finish, equips a selected combat job, routes to the relevant monster, and resumes the crafting flow after the hunt step.
 
-The plugin is intended for explicit, user-visible automation of drop material cleanup. It depends on supported plugin IPC being available and reports missing dependencies in its configuration window and status command.
+The plugin is intended for explicit, user-visible drop material cleanup. It depends on supported plugin IPC being available and reports missing dependencies in its configuration window and status command.
 
-## Dependencies
+## Dependencies and Compatibility
 
-- GatherBuddy Reborn: source for gathering state and auto-gather controls.
-- Vulcan: source for active crafting/material plan state.
-- Lifestream: route/teleport support.
-- vnavmesh: navigation support.
-- RotationSolverReborn: combat automation coordination.
+- GatherBuddy Reborn: source for gathering state and auto-gather controls. Requires IPC v2+.
+- Vulcan / GatherBuddy crafting bridge: source for active crafting/material plan state. GBR Monster Hunter currently reads this through reflection, so internal type/member changes can break compatibility.
+- Lifestream: preferred route/teleport support. If unavailable, the configured Teleporter command template is used as a fallback.
+- vnavmesh: pathfinding and movement support.
+- RotationSolverReborn: combat coordination through IPC; GBR Monster Hunter can prepare the RSR driver before combat.
+- WrathCombo: readiness detection through IPC. Current support checks IPC readiness/current-job readiness, but does not force-enable WrathCombo.
+
+## Runtime Notes
+
+- Vulcan is only resumed when GBR Monster Hunter owns the pause reason it created.
+- If Vulcan is already paused for another reason, GBR Monster Hunter waits instead of overwriting or resuming that pause.
+- Plugin disposal stops active navigation and attempts to release owned state.
+- The target-search radius, arrival distance, navigation timeout, and target-search timeout are configurable from the UI.
 
 ## Commands
 
