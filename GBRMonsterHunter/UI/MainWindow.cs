@@ -42,7 +42,13 @@ internal sealed class MainWindow
 
     public bool IsOpen { get; set; }
 
-    public void Dispose() => rotationDriver.Dispose();
+    public void Dispose()
+    {
+        Shutdown();
+        rotationDriver.Dispose();
+    }
+
+    public void Shutdown() => automation.Stop();
 
     public void Update()
     {
@@ -78,7 +84,7 @@ internal sealed class MainWindow
         if (!IsOpen)
             return;
 
-        ImGui.SetNextWindowSize(new Vector2(520, 310), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(new Vector2(560, 380), ImGuiCond.FirstUseEver);
         var isOpen = IsOpen;
         if (!ImGui.Begin("GBR Monster Hunter", ref isOpen))
         {
@@ -104,6 +110,7 @@ internal sealed class MainWindow
         ImGui.TextUnformatted($"Automation: {automation.StatusText}");
         DrawCombatJobSelector();
         DrawRotationDriverSelector();
+        DrawNavigationTuning();
         ImGui.TextUnformatted($"Combat job: {automation.CombatJobStatus}");
         DrawStatusLine("GBR", gbr.Available, gbr.Available ? $"IPC v{gbr.GetVersion()}: {gbr.GetStatus()}" : gbr.LastError);
         DrawStatusLine("Lifestream", lifestream.Available, lifestream.Available ? $"busy={lifestream.IsBusy()}" : lifestream.LastError);
@@ -153,6 +160,40 @@ internal sealed class MainWindow
         }
 
         ImGui.EndCombo();
+    }
+
+    private void DrawNavigationTuning()
+    {
+        if (!ImGui.CollapsingHeader("Navigation tuning"))
+            return;
+
+        var arrivalDistance = config.ArrivalDistance;
+        if (ImGui.InputFloat("Arrival distance", ref arrivalDistance))
+        {
+            config.ArrivalDistance = Math.Clamp(arrivalDistance, 2f, 50f);
+            config.Save();
+        }
+
+        var targetSearchRadius = config.TargetSearchRadius;
+        if (ImGui.InputFloat("Target search radius", ref targetSearchRadius))
+        {
+            config.TargetSearchRadius = Math.Clamp(targetSearchRadius, 5f, 100f);
+            config.Save();
+        }
+
+        var navigationTimeout = (float)config.NavigationTimeoutSeconds;
+        if (ImGui.InputFloat("Navigation timeout (s)", ref navigationTimeout))
+        {
+            config.NavigationTimeoutSeconds = Math.Clamp(navigationTimeout, 30f, 900f);
+            config.Save();
+        }
+
+        var targetSearchTimeout = (float)config.TargetSearchTimeoutSeconds;
+        if (ImGui.InputFloat("Target search timeout (s)", ref targetSearchTimeout))
+        {
+            config.TargetSearchTimeoutSeconds = Math.Clamp(targetSearchTimeout, 5f, 120f);
+            config.Save();
+        }
     }
 
     private void DrawActions()
