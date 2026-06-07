@@ -1,5 +1,6 @@
+using System.Numerics;
 using Dalamud.Game.ClientState.Conditions;
-using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.Types;
 using GBRMonsterHunter.IPC;
 
 namespace GBRMonsterHunter.Planning;
@@ -11,6 +12,7 @@ internal enum MonsterNavigationState
     WaitingForZoneLoad,
     Navigating,
     ArrivedSearching,
+    MovingToTarget,
     Arrived,
     Failed,
 }
@@ -27,13 +29,20 @@ internal sealed class MonsterNavigator(
     private const double TeleportCooldownSeconds = 3.0;
     private const double ZoneLoadWaitSeconds = 1.5;
     private const double TargetSearchRetrySeconds = 2.0;
+    private const double TargetRepathSeconds = 2.0;
+
+    private readonly List<MonsterLocation> patrolLocations = [];
 
     private MonsterLocation? target;
     private AetheryteRoute? route;
+    private IBattleNpc? acquiredTarget;
+    private Vector3 lastTargetMovePosition;
     private DateTime stateStartedAt = DateTime.MinValue;
     private DateTime nextTargetSearchAt = DateTime.MinValue;
+    private DateTime nextTargetRepathAt = DateTime.MinValue;
     private bool teleportAttempted;
     private int targetSearchAttempts;
+    private int patrolIndex;
 
     public MonsterNavigationState State { get; private set; }
     public string StatusText { get; private set; } = "Idle";
@@ -43,28 +52,23 @@ internal sealed class MonsterNavigator(
     private double NavigationTimeoutSeconds => Math.Clamp(config.NavigationTimeoutSeconds, 30.0, 900.0);
     private double TargetSearchTimeoutSeconds => Math.Clamp(config.TargetSearchTimeoutSeconds, 5.0, 120.0);
 
-    public bool Start(MonsterLocation location)
+    public bool Start(MonsterLocation location) => Start([location]);
+
+    public bool Start(IReadOnlyList<MonsterLocation> locations)
     {
-        route = planner.ResolveRoute(location);
-        if (route == null)
+        Stop();
+        patrolLocations.Clear();
+        patrolLocations.AddRange(OrderPatrolLocations(locations));
+        patrolIndex = 0;
+
+        if (patrolLocations.Count == 0)
         {
             State = MonsterNavigationState.Failed;
-            StatusText = "No usable route/aetheryte found for monster location.";
+            StatusText = "No usable monster cluster locations were provided.";
             return false;
         }
 
-        target = location;
-        teleportAttempted = false;
-        targetSearchAttempts = 0;
-        nextTargetSearchAt = DateTime.MinValue;
-        State = services.ClientState.TerritoryType == route.TerritoryTypeId
-            ? MonsterNavigationState.WaitingForZoneLoad
-            : MonsterNavigationState.Teleporting;
-        stateStartedAt = DateTime.UtcNow;
-        StatusText = State == MonsterNavigationState.Teleporting
-            ? $"Teleporting to {route.AetheryteName}"
-            : "Preparing local navigation";
-        return true;
+        return StartCurrentPatrolLocation();
     }
 
     public void Stop()
@@ -74,9 +78,13 @@ internal sealed class MonsterNavigator(
         rotationDriver.ResumeCombat();
         target = null;
         route = null;
+        acquiredTarget = null;
+        patrolLocations.Clear();
+        patrolIndex = 0;
         teleportAttempted = false;
         targetSearchAttempts = 0;
         nextTargetSearchAt = DateTime.MinValue;
+        nextTargetRepathAt = DateTime.MinValue;
         State = MonsterNavigationState.Idle;
         StatusText = "Idle";
     }
@@ -100,7 +108,94 @@ internal sealed class MonsterNavigator(
             case MonsterNavigationState.ArrivedSearching:
                 UpdateArrivedSearching();
                 break;
+            case MonsterNavigationState.MovingToTarget:
+                UpdateMovingToTarget();
+                break;
         }
+    }
+
+    private IReadOnlyList<MonsterLocation> OrderPatrolLocations(IReadOnlyList<MonsterLocation> locations)
+    {
+        var uniqueLocations = locations
+            .Where(location => location.HasMapCoordinates)
+            .DistinctBy(location => new
+            {
+                location.MobName,
+                location.TerritoryTypeId,
+                location.MapRowId,
+                location.MapX,
+                location.MapY,
+                location.BNpcNameId,
+            })
+            .ToList();
+
+        var player = services.Objects.LocalPlayer;
+        if (player == null)
+            return uniqueLocations;
+
+        var currentTerritory = services.ClientState.TerritoryType;
+        var sameTerritory = uniqueLocations
+            .Where(location => location.TerritoryTypeId == currentTerritory)
+            .Select(location => (Location: location, Route: planner.ResolveRoute(location)))
+            .Where(entry => entry.Route != null)
+            .OrderBy(entry => Vector3.DistanceSquared(player.Position, entry.Route!.Destination))
+            .Select(entry => entry.Location)
+            .ToList();
+
+        var otherTerritories = uniqueLocations
+            .Where(location => location.TerritoryTypeId != currentTerritory)
+            .ToList();
+
+        return sameTerritory.Count == 0
+            ? uniqueLocations
+            : sameTerritory.Concat(otherTerritories).ToList();
+    }
+
+    private bool StartCurrentPatrolLocation()
+    {
+        for (var attempts = 0; attempts < patrolLocations.Count; attempts++)
+        {
+            if (patrolIndex >= patrolLocations.Count)
+                patrolIndex = 0;
+
+            target = patrolLocations[patrolIndex];
+            route = planner.ResolveRoute(target);
+            if (route == null)
+            {
+                patrolIndex++;
+                continue;
+            }
+
+            acquiredTarget = null;
+            teleportAttempted = false;
+            targetSearchAttempts = 0;
+            nextTargetSearchAt = DateTime.MinValue;
+            nextTargetRepathAt = DateTime.MinValue;
+            State = services.ClientState.TerritoryType == route.TerritoryTypeId
+                ? MonsterNavigationState.WaitingForZoneLoad
+                : MonsterNavigationState.Teleporting;
+            stateStartedAt = DateTime.UtcNow;
+            StatusText = State == MonsterNavigationState.Teleporting
+                ? $"Teleporting to {route.AetheryteName} for cluster {patrolIndex + 1}/{patrolLocations.Count}"
+                : $"Preparing cluster {patrolIndex + 1}/{patrolLocations.Count}";
+            return true;
+        }
+
+        target = null;
+        route = null;
+        State = MonsterNavigationState.Failed;
+        StatusText = "No usable route/aetheryte found for any monster cluster.";
+        return false;
+    }
+
+    private void AdvanceToNextPatrolLocation(string reason)
+    {
+        patrolIndex++;
+        if (patrolIndex >= patrolLocations.Count)
+            patrolIndex = 0;
+
+        StatusText = $"{reason}; moving to cluster {patrolIndex + 1}/{patrolLocations.Count}.";
+        StartCurrentPatrolLocation();
     }
 
     private void UpdateTeleporting()
@@ -112,7 +207,7 @@ internal sealed class MonsterNavigator(
         {
             teleportAttempted = true;
             stateStartedAt = DateTime.UtcNow;
-            StatusText = $"Teleporting to {route!.AetheryteName}";
+            StatusText = $"Teleporting to {route!.AetheryteName} for cluster {patrolIndex + 1}/{patrolLocations.Count}";
 
             lifestream.RefreshAvailability();
             if (lifestream.Available)
@@ -146,6 +241,9 @@ internal sealed class MonsterNavigator(
         if ((DateTime.UtcNow - stateStartedAt).TotalSeconds < ZoneLoadWaitSeconds)
             return;
 
+        if (TryAcquireVisibleTarget(false))
+            return;
+
         StartVnavmeshNavigation();
     }
 
@@ -162,14 +260,13 @@ internal sealed class MonsterNavigator(
         var destination = vnavmesh.NearestPoint(route!.Destination) ?? route.Destination;
         if (!vnavmesh.PathfindAndMoveCloseTo(destination, ArrivalDistance))
         {
-            State = MonsterNavigationState.Failed;
-            StatusText = $"Failed to start vnavmesh movement: {vnavmesh.LastError ?? "unknown error"}";
+            AdvanceToNextPatrolLocation($"Failed to start movement to cluster {patrolIndex + 1}/{patrolLocations.Count}: {vnavmesh.LastError ?? "unknown error"}");
             return;
         }
 
         State = MonsterNavigationState.Navigating;
         stateStartedAt = DateTime.UtcNow;
-        StatusText = $"Moving to {target!.MobName}";
+        StatusText = $"Moving to {target!.MobName} cluster {patrolIndex + 1}/{patrolLocations.Count}";
     }
 
     private void UpdateNavigating()
@@ -183,11 +280,14 @@ internal sealed class MonsterNavigator(
             return;
         }
 
+        if (TryAcquireVisibleTarget(false))
+            return;
+
         var player = services.Objects.LocalPlayer;
         if (player == null)
             return;
 
-        var distance = System.Numerics.Vector3.Distance(player.Position, route.Destination);
+        var distance = Vector3.Distance(player.Position, route.Destination);
         if (distance <= ArrivalDistance)
         {
             HandleArrival();
@@ -197,14 +297,13 @@ internal sealed class MonsterNavigator(
         if ((DateTime.UtcNow - stateStartedAt).TotalSeconds > NavigationTimeoutSeconds)
         {
             vnavmesh.Stop();
-            State = MonsterNavigationState.Failed;
-            StatusText = $"Navigation timeout; still {distance:F1} yalms away.";
+            AdvanceToNextPatrolLocation($"Navigation timeout at cluster {patrolIndex + 1}/{patrolLocations.Count}; still {distance:F1} yalms away");
             return;
         }
 
         if (!vnavmesh.IsNavigating())
         {
-            StatusText = $"Movement stopped; restarting ({distance:F1} yalms remaining)";
+            StatusText = $"Movement stopped; restarting cluster {patrolIndex + 1}/{patrolLocations.Count} ({distance:F1} yalms remaining)";
             StartVnavmeshNavigation();
         }
     }
@@ -212,17 +311,14 @@ internal sealed class MonsterNavigator(
     private void HandleArrival()
     {
         vnavmesh.Stop();
-        if (TrySelectHuntedTarget())
-        {
-            CompleteArrivalWithTarget();
+        if (TryAcquireVisibleTarget(true))
             return;
-        }
 
         State = MonsterNavigationState.ArrivedSearching;
         stateStartedAt = DateTime.UtcNow;
         nextTargetSearchAt = DateTime.UtcNow;
         targetSearchAttempts = 0;
-        StatusText = $"Arrived, searching for {target!.MobName}.";
+        StatusText = $"Arrived at cluster {patrolIndex + 1}/{patrolLocations.Count}, searching for {target!.MobName}.";
     }
 
     private void UpdateArrivedSearching()
@@ -243,22 +339,106 @@ internal sealed class MonsterNavigator(
             return;
 
         targetSearchAttempts++;
-        if (TrySelectHuntedTarget())
-        {
-            CompleteArrivalWithTarget();
+        if (TryAcquireVisibleTarget(true))
             return;
-        }
 
         var elapsed = (DateTime.UtcNow - stateStartedAt).TotalSeconds;
         if (elapsed > TargetSearchTimeoutSeconds)
         {
-            StatusText = $"Could not find {target!.MobName} after {elapsed:F0}s; retrying route.";
-            StartVnavmeshNavigation();
+            AdvanceToNextPatrolLocation($"Could not find {target!.MobName} at cluster {patrolIndex + 1}/{patrolLocations.Count} after {elapsed:F0}s");
             return;
         }
 
         nextTargetSearchAt = DateTime.UtcNow.AddSeconds(TargetSearchRetrySeconds);
-        StatusText = $"Arrived, searching for {target!.MobName} ({targetSearchAttempts} attempt(s)).";
+        StatusText = $"Arrived at cluster {patrolIndex + 1}/{patrolLocations.Count}, searching for {target!.MobName} ({targetSearchAttempts} attempt(s)).";
+    }
+
+    private void UpdateMovingToTarget()
+    {
+        if (acquiredTarget == null || acquiredTarget.IsDead || !acquiredTarget.IsTargetable)
+        {
+            acquiredTarget = null;
+            services.Targets.Target = null;
+            State = MonsterNavigationState.ArrivedSearching;
+            stateStartedAt = DateTime.UtcNow;
+            nextTargetSearchAt = DateTime.UtcNow;
+            StatusText = $"Lost target; searching cluster {patrolIndex + 1}/{patrolLocations.Count}.";
+            return;
+        }
+
+        var player = services.Objects.LocalPlayer;
+        if (player == null)
+            return;
+
+        var stopDistance = GetCombatStopDistance(acquiredTarget);
+        var distance = Math.Max(0f, Vector3.Distance(player.Position, acquiredTarget.Position) - acquiredTarget.HitboxRadius);
+        if (distance <= stopDistance)
+        {
+            vnavmesh.Stop();
+            services.Targets.Target = acquiredTarget;
+            CompleteArrivalWithTarget();
+            return;
+        }
+
+        if ((DateTime.UtcNow - stateStartedAt).TotalSeconds > NavigationTimeoutSeconds)
+        {
+            vnavmesh.Stop();
+            State = MonsterNavigationState.Failed;
+            StatusText = $"Timed out moving to {acquiredTarget.Name} ({distance:F1} yalms away).";
+            return;
+        }
+
+        if (DateTime.UtcNow < nextTargetRepathAt && vnavmesh.IsNavigating())
+            return;
+
+        var moved = Vector3.DistanceSquared(lastTargetMovePosition, acquiredTarget.Position) > MathF.Max(1f, acquiredTarget.HitboxRadius * acquiredTarget.HitboxRadius);
+        if (!vnavmesh.IsNavigating() || moved)
+            StartTargetMovement();
+    }
+
+    private bool TryAcquireVisibleTarget(bool restrictToCurrentCluster)
+    {
+        var match = FindVisibleHuntedTarget(restrictToCurrentCluster);
+        if (match == null)
+            return false;
+
+        acquiredTarget = match;
+        services.Targets.Target = match;
+        vnavmesh.Stop();
+        State = MonsterNavigationState.MovingToTarget;
+        stateStartedAt = DateTime.UtcNow;
+        nextTargetRepathAt = DateTime.MinValue;
+        lastTargetMovePosition = match.Position;
+        StatusText = $"Acquired {match.Name}; moving to attack range.";
+        StartTargetMovement();
+        return true;
+    }
+
+    private void StartTargetMovement()
+    {
+        if (acquiredTarget == null)
+            return;
+
+        vnavmesh.RefreshAvailability();
+        if (!vnavmesh.Available || !vnavmesh.IsReady())
+        {
+            State = MonsterNavigationState.Failed;
+            StatusText = $"vnavmesh unavailable while moving to target: {vnavmesh.LastError ?? "navmesh not ready"}";
+            return;
+        }
+
+        var stopDistance = GetCombatStopDistance(acquiredTarget);
+        var destination = vnavmesh.NearestPoint(acquiredTarget.Position, 6f, 12f) ?? acquiredTarget.Position;
+        if (!vnavmesh.PathfindAndMoveCloseTo(destination, stopDistance))
+        {
+            State = MonsterNavigationState.Failed;
+            StatusText = $"Failed to move to {acquiredTarget.Name}: {vnavmesh.LastError ?? "unknown error"}";
+            return;
+        }
+
+        lastTargetMovePosition = acquiredTarget.Position;
+        nextTargetRepathAt = DateTime.UtcNow.AddSeconds(TargetRepathSeconds);
+        StatusText = $"Moving to {acquiredTarget.Name} for combat.";
     }
 
     private void CompleteArrivalWithTarget()
@@ -270,36 +450,41 @@ internal sealed class MonsterNavigator(
             : $"Targeted {target!.MobName}; combat driver unavailable ({rotationDriver.LastError ?? rotationDriver.StatusDetail}).";
     }
 
-    private bool TrySelectHuntedTarget()
+    private IBattleNpc? FindVisibleHuntedTarget(bool restrictToCurrentCluster)
     {
         if (target == null || route == null)
-            return false;
+            return null;
 
+        var player = services.Objects.LocalPlayer;
+        var playerPosition = player?.Position ?? route.Destination;
         var searchRadius = TargetSearchRadius;
-        var match = services.Objects
-            .Where(obj => obj.ObjectKind == ObjectKind.BattleNpc && obj.IsTargetable)
-            .Select(obj => new
+
+        return services.Objects
+            .OfType<IBattleNpc>()
+            .Where(npc => npc.IsTargetable && !npc.IsDead)
+            .Select(npc =>
             {
-                Object = obj,
-                IdMatches = target.BNpcNameId != null && obj.BaseId == target.BNpcNameId.Value,
-                NameMatches = string.Equals(obj.Name.ToString(), target.MobName, StringComparison.OrdinalIgnoreCase),
-                Distance = System.Numerics.Vector3.Distance(obj.Position, route.Destination),
-                DistanceSquared = System.Numerics.Vector3.DistanceSquared(obj.Position, route.Destination),
+                var nameIdMatches = target.BNpcNameId is > 0 && npc.NameId == target.BNpcNameId.Value;
+                var baseIdMatches = target.BNpcNameId is > 0 && npc.BaseId == target.BNpcNameId.Value;
+                var nameMatches = string.Equals(npc.Name.ToString(), target.MobName, StringComparison.OrdinalIgnoreCase);
+                var priority = nameIdMatches ? 3 : baseIdMatches ? 2 : nameMatches ? 1 : 0;
+                return new
+                {
+                    Object = npc,
+                    Priority = priority,
+                    DistanceToPlayer = Vector3.DistanceSquared(npc.Position, playerPosition),
+                    DistanceToCluster = Vector3.Distance(npc.Position, route.Destination),
+                };
             })
-            .Where(candidate => candidate.Distance <= searchRadius)
-            .Where(candidate => candidate.IdMatches || candidate.NameMatches)
-            .OrderByDescending(candidate => candidate.IdMatches)
-            .ThenByDescending(candidate => candidate.NameMatches)
-            .ThenBy(candidate => candidate.DistanceSquared)
+            .Where(candidate => candidate.Priority > 0)
+            .Where(candidate => !restrictToCurrentCluster || candidate.DistanceToCluster <= searchRadius)
+            .OrderByDescending(candidate => candidate.Priority)
+            .ThenBy(candidate => candidate.DistanceToPlayer)
             .Select(candidate => candidate.Object)
             .FirstOrDefault();
-
-        if (match == null)
-            return false;
-
-        services.Targets.Target = match;
-        return true;
     }
+
+    private static float GetCombatStopDistance(IBattleNpc target) => Math.Clamp(target.HitboxRadius + 2.9f, 3f, 12f);
 
     private bool IsBetweenAreas() =>
         services.Condition[ConditionFlag.BetweenAreas] || services.Condition[ConditionFlag.BetweenAreas51];
