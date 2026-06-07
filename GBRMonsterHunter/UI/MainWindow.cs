@@ -225,10 +225,33 @@ internal sealed class MainWindow
         using (BeginCard("##navigation-settings", new Vector2(-1, 210), Accent))
         {
             DrawSectionTitle("Navigation Tuning");
-            DrawFloatSetting("Arrival distance", "Distance in yalms considered close enough to start target search.", ref config.ArrivalDistance, 0.1f, 2f, 50f);
-            DrawFloatSetting("Target search radius", "Radius around the destination used to find matching battle NPCs.", ref config.TargetSearchRadius, 0.5f, 5f, 100f);
-            DrawDoubleSetting("Navigation timeout (s)", "Maximum route movement time before failure.", ref config.NavigationTimeoutSeconds, 1f, 30.0, 900.0);
-            DrawDoubleSetting("Target search timeout (s)", "How long to wait at arrival before retrying the route.", ref config.TargetSearchTimeoutSeconds, 1f, 5.0, 120.0);
+            var arrivalDistance = config.ArrivalDistance;
+            if (DrawFloatSetting("Arrival distance", "Distance in yalms considered close enough to start target search.", ref arrivalDistance, 0.1f, 2f, 50f))
+            {
+                config.ArrivalDistance = arrivalDistance;
+                config.Save();
+            }
+
+            var targetSearchRadius = config.TargetSearchRadius;
+            if (DrawFloatSetting("Target search radius", "Radius around the destination used to find matching battle NPCs.", ref targetSearchRadius, 0.5f, 5f, 100f))
+            {
+                config.TargetSearchRadius = targetSearchRadius;
+                config.Save();
+            }
+
+            var navigationTimeout = config.NavigationTimeoutSeconds;
+            if (DrawDoubleSetting("Navigation timeout (s)", "Maximum route movement time before failure.", ref navigationTimeout, 1f, 30.0, 900.0))
+            {
+                config.NavigationTimeoutSeconds = navigationTimeout;
+                config.Save();
+            }
+
+            var targetSearchTimeout = config.TargetSearchTimeoutSeconds;
+            if (DrawDoubleSetting("Target search timeout (s)", "How long to wait at arrival before retrying the route.", ref targetSearchTimeout, 1f, 5.0, 120.0))
+            {
+                config.TargetSearchTimeoutSeconds = targetSearchTimeout;
+                config.Save();
+            }
         }
     }
 
@@ -366,25 +389,31 @@ internal sealed class MainWindow
         ImGui.Dummy(size);
     }
 
-    private void DrawFloatSetting(string label, string tooltip, ref float value, float speed, float min, float max)
+    private static bool DrawFloatSetting(string label, string tooltip, ref float value, float speed, float min, float max)
     {
         if (ImGui.DragFloat(label, ref value, speed, min, max))
         {
             value = Math.Clamp(value, min, max);
-            config.Save();
+            DrawTooltip(tooltip);
+            return true;
         }
+
         DrawTooltip(tooltip);
+        return false;
     }
 
-    private void DrawDoubleSetting(string label, string tooltip, ref double value, float speed, double min, double max)
+    private static bool DrawDoubleSetting(string label, string tooltip, ref double value, float speed, double min, double max)
     {
         var working = (float)value;
         if (ImGui.DragFloat(label, ref working, speed, (float)min, (float)max))
         {
             value = Math.Clamp(working, (float)min, (float)max);
-            config.Save();
+            DrawTooltip(tooltip);
+            return true;
         }
+
         DrawTooltip(tooltip);
+        return false;
     }
 
     private static void DrawTooltip(string text)
