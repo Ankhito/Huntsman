@@ -200,7 +200,8 @@ internal sealed class VulcanDropAutomation(
         if (routedItemId == active.ItemId)
             return;
 
-        if (active.GetBestLocation(services.ClientState.TerritoryType) is not { } location)
+        var locations = active.GetCandidateLocations(services.ClientState.TerritoryType);
+        if (locations.Count == 0)
         {
             StatusText = $"No route data for {active.ItemName}; Vulcan remains paused.";
             return;
@@ -212,10 +213,10 @@ internal sealed class VulcanDropAutomation(
             return;
         }
 
-        if (monsterNavigator.Start(location))
+        if (monsterNavigator.Start(locations))
         {
             routedItemId = active.ItemId;
-            StatusText = $"Routing to {active.ItemName}: {location.MobName}.";
+            StatusText = $"Patrolling {locations.Count} cluster(s) for {active.ItemName}: {locations[0].MobName}.";
         }
         else
         {
