@@ -5,6 +5,7 @@ using GBRMonsterHunter.UI;
 namespace GBRMonsterHunter.Automation;
 
 internal sealed class VulcanDropAutomation(
+    PluginServices services,
     GatherBuddyRebornIpc gbr,
     VulcanReflectionAdapter vulcan,
     MaterialPlanner planner,
@@ -31,6 +32,7 @@ internal sealed class VulcanDropAutomation(
         var snapshot = vulcan.GetActiveExecutionPlan();
         if (snapshot == null)
         {
+            ResumeIfNeeded();
             CurrentPlanName = "None";
             StatusText = vulcan.Available ? "Waiting for Vulcan." : $"Vulcan listener unavailable: {vulcan.LastError}";
             return;
@@ -74,7 +76,9 @@ internal sealed class VulcanDropAutomation(
             return;
         }
 
-        PauseVulcanForDrops();
+        if (!PauseVulcanForDrops())
+            return;
+
         RouteActiveIfNeeded();
     }
 
@@ -121,14 +125,30 @@ internal sealed class VulcanDropAutomation(
         StatusText = $"Detected {dropHuntList.Items.Count} drop target(s) for '{snapshot.ListName}'.";
     }
 
-    private void PauseVulcanForDrops()
+    private bool PauseVulcanForDrops()
     {
+        var queue = vulcan.GetQueueSnapshot();
+        if (queue?.Paused == true)
+        {
+            if (!string.Equals(queue.PauseReason, PauseReason, StringComparison.Ordinal))
+            {
+                pausedVulcan = false;
+                StatusText = $"Vulcan is already paused for another reason ({queue.PauseReason}); waiting before drop hunt.";
+                return false;
+            }
+
+            pausedVulcan = true;
+            StatusText = $"Paused Vulcan for drops. {dropHuntList.StatusText}";
+            return true;
+        }
+
         if (!pausedVulcan)
             pausedVulcan = vulcan.PauseQueue(PauseReason);
 
         StatusText = pausedVulcan
             ? $"Paused Vulcan for drops. {dropHuntList.StatusText}"
             : $"Drop hunt active; failed to pause Vulcan: {vulcan.LastError ?? "unknown error"}";
+        return pausedVulcan;
     }
 
     private bool IsGbrGatheringComplete(VulcanQueueSnapshot queue)
@@ -151,6 +171,19 @@ internal sealed class VulcanDropAutomation(
         if (!pausedVulcan)
             return;
 
+        var queue = vulcan.GetQueueSnapshot();
+        if (queue?.Paused == true && !string.Equals(queue.PauseReason, PauseReason, StringComparison.Ordinal))
+        {
+            pausedVulcan = false;
+            return;
+        }
+
+        if (queue?.Paused == false)
+        {
+            pausedVulcan = false;
+            return;
+        }
+
         if (vulcan.ResumeQueue())
             pausedVulcan = false;
     }
@@ -164,7 +197,7 @@ internal sealed class VulcanDropAutomation(
         if (routedItemId == active.ItemId)
             return;
 
-        if (active.GetBestLocation() is not { } location)
+        if (active.GetBestLocation(services.ClientState.TerritoryType) is not { } location)
         {
             StatusText = $"No route data for {active.ItemName}; Vulcan remains paused.";
             return;
