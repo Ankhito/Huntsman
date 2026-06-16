@@ -7,9 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>GBRMonsterHunter</AssemblyName>
     <RootNamespace>GBRMonsterHunter</RootNamespace>
-    <Version>0.1.12</Version>
-    <AssemblyVersion>0.1.12.0</AssemblyVersion>
-    <FileVersion>0.1.12.0</FileVersion>
+    <Version>0.1.13</Version>
+    <AssemblyVersion>0.1.13.0</AssemblyVersion>
+    <FileVersion>0.1.13.0</FileVersion>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>

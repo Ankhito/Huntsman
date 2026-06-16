@@ -241,9 +241,30 @@ internal sealed class MainWindow
             DrawKeyValue("Selection", "same territory, highest spawn count, stable ordering");
         }
 
-        using (BeginCard("##navigation-settings", new Vector2(-1, 210), Accent))
+        using (BeginCard("##navigation-settings", new Vector2(-1, 292), Accent))
         {
             DrawSectionTitle("Navigation Tuning");
+            var autoMountEnabled = config.AutoMountEnabled;
+            if (ImGui.Checkbox("Auto-mount between route points", ref autoMountEnabled))
+            {
+                config.AutoMountEnabled = autoMountEnabled;
+                config.Save();
+            }
+
+            var autoDismountBeforeCombat = config.AutoDismountBeforeCombat;
+            if (ImGui.Checkbox("Auto-dismount before combat", ref autoDismountBeforeCombat))
+            {
+                config.AutoDismountBeforeCombat = autoDismountBeforeCombat;
+                config.Save();
+            }
+
+            var autoMountMinDistance = config.AutoMountMinDistance;
+            if (DrawFloatSetting("Minimum mount distance", "Minimum route distance before attempting Mount Roulette.", ref autoMountMinDistance, 1f, 5f, 200f))
+            {
+                config.AutoMountMinDistance = autoMountMinDistance;
+                config.Save();
+            }
+
             var arrivalDistance = config.ArrivalDistance;
             if (DrawFloatSetting("Arrival distance", "Distance in yalms considered close enough to start target search.", ref arrivalDistance, 0.1f, 2f, 50f))
             {
@@ -308,12 +329,29 @@ internal sealed class MainWindow
             DrawKeyValue("Rotation", rotationDriver.StatusDetail);
         }
 
-        using (BeginCard("##navigation-diagnostics", new Vector2(-1, 132), monsterNavigator.State == MonsterNavigationState.Failed ? Error : Accent))
+        using (BeginCard("##navigation-diagnostics", new Vector2(-1, 344), monsterNavigator.State == MonsterNavigationState.Failed ? Error : Accent))
         {
+            var activeItem = dropHuntList.ActiveItem;
+            var activeLocation = monsterNavigator.ActiveLocation ?? activeItem?.GetBestLocation(monsterNavigator.CurrentTerritoryTypeId);
+            var activeRoute = monsterNavigator.ActiveRoute;
             DrawSectionTitle("Navigation State");
             DrawKeyValue("State", monsterNavigator.State.ToString());
             DrawKeyValue("Status", monsterNavigator.StatusText);
-            DrawKeyValue("Active item", dropHuntList.ActiveItem?.ItemName ?? "none");
+            DrawKeyValue("Active item", activeItem == null ? "none" : $"{activeItem.ItemName} ({activeItem.ItemId})");
+            DrawKeyValue("Selected mob", activeLocation?.MobName ?? "none");
+            DrawKeyValue("BNpcName ID", activeLocation?.BNpcNameId?.ToString() ?? "none");
+            DrawKeyValue("Territory ID", activeLocation?.TerritoryTypeId.ToString() ?? "none");
+            DrawKeyValue("Map ID", activeLocation?.MapRowId.ToString() ?? "none");
+            DrawKeyValue("Map X/Y", activeLocation == null ? "none" : $"{activeLocation.MapX:F1}, {activeLocation.MapY:F1}");
+            DrawKeyValue("Current territory", monsterNavigator.CurrentTerritoryTypeId.ToString());
+            DrawKeyValue("Route destination", activeRoute == null ? "none" : $"{activeRoute.Destination.X:F1}, {activeRoute.Destination.Y:F1}, {activeRoute.Destination.Z:F1}");
+            DrawKeyValue("Last route error", monsterNavigator.LastRouteStartError ?? "none");
+            DrawKeyValue("Last vnavmesh error", monsterNavigator.LastVnavmeshError ?? "none");
+            DrawKeyValue("Mounted", monsterNavigator.IsMounted.ToString());
+            DrawKeyValue("Auto-mount", config.AutoMountEnabled.ToString());
+            DrawKeyValue("Auto-dismount", config.AutoDismountBeforeCombat.ToString());
+            DrawKeyValue("Last mount", monsterNavigator.LastMountStatus);
+            DrawKeyValue("Last dismount", monsterNavigator.LastDismountStatus);
         }
     }
 

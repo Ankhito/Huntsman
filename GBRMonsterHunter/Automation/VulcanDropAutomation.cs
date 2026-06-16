@@ -168,7 +168,7 @@ internal sealed class VulcanDropAutomation(
 
         StatusText = pausedVulcan
             ? $"Paused Vulcan for drops. {dropHuntList.StatusText}"
-            : $"Drop hunt active; failed to pause Vulcan: {vulcan.LastError ?? "unknown error"}";
+            : $"Drop hunt active; failed to pause Vulcan: {vulcan.LastError ?? "PauseQueue returned no detail"}";
         return pausedVulcan;
     }
 

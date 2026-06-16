@@ -23,6 +23,9 @@ internal sealed class Configuration : IPluginConfiguration
     public float TargetSearchRadius { get; set; } = 35f;
     public double NavigationTimeoutSeconds { get; set; } = 180.0;
     public double TargetSearchTimeoutSeconds { get; set; } = 30.0;
+    public bool AutoMountEnabled { get; set; } = true;
+    public bool AutoDismountBeforeCombat { get; set; } = true;
+    public float AutoMountMinDistance { get; set; } = 35f;
 
     public void Initialize(IDalamudPluginInterface pi) => pluginInterface = pi;
 

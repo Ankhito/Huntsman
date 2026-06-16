@@ -24,12 +24,16 @@ internal sealed class MonsterNavigator(
     VnavmeshIpc vnavmesh,
     RotationDriverService rotationDriver,
     CommandBridge commands,
-    MonsterRoutePlanner planner)
+    MonsterRoutePlanner planner,
+    MountService mountService)
 {
     private const double TeleportCooldownSeconds = 3.0;
     private const double ZoneLoadWaitSeconds = 1.5;
     private const double TargetSearchRetrySeconds = 2.0;
     private const double TargetRepathSeconds = 2.0;
+    private const double MountCommandCooldownSeconds = 5.0;
+    private const double MountWaitSeconds = 2.0;
+    private const double DismountCommandCooldownSeconds = 2.0;
 
     private readonly List<MonsterLocation> patrolLocations = [];
 
@@ -40,12 +44,23 @@ internal sealed class MonsterNavigator(
     private DateTime stateStartedAt = DateTime.MinValue;
     private DateTime nextTargetSearchAt = DateTime.MinValue;
     private DateTime nextTargetRepathAt = DateTime.MinValue;
+    private DateTime lastMountAttemptAt = DateTime.MinValue;
+    private DateTime lastDismountAttemptAt = DateTime.MinValue;
     private bool teleportAttempted;
+    private bool mountAttemptedForCluster;
     private int targetSearchAttempts;
     private int patrolIndex;
 
     public MonsterNavigationState State { get; private set; }
     public string StatusText { get; private set; } = "Idle";
+    public string? LastRouteStartError { get; private set; }
+    public MonsterLocation? ActiveLocation => target;
+    public AetheryteRoute? ActiveRoute => route;
+    public string? LastVnavmeshError => vnavmesh.LastError;
+    public uint CurrentTerritoryTypeId => services.ClientState.TerritoryType;
+    public bool IsMounted => mountService.IsMounted;
+    public string LastMountStatus => mountService.LastMountStatus;
+    public string LastDismountStatus => mountService.LastDismountStatus;
 
     private float ArrivalDistance => Math.Clamp(config.ArrivalDistance, 2f, 50f);
     private float TargetSearchRadius => Math.Clamp(config.TargetSearchRadius, 5f, 100f);
@@ -57,14 +72,17 @@ internal sealed class MonsterNavigator(
     public bool Start(IReadOnlyList<MonsterLocation> locations)
     {
         Stop();
+        var validLocations = FilterValidRouteCandidates(locations, out var validationSummary);
         patrolLocations.Clear();
-        patrolLocations.AddRange(OrderPatrolLocations(locations));
+        patrolLocations.AddRange(OrderPatrolLocations(validLocations));
         patrolIndex = 0;
 
         if (patrolLocations.Count == 0)
         {
             State = MonsterNavigationState.Failed;
-            StatusText = "No usable monster cluster locations were provided.";
+            LastRouteStartError = validationSummary ?? "No usable monster cluster locations were provided.";
+            StatusText = LastRouteStartError;
+            services.Log.Warning($"Monster route start failed: {LastRouteStartError}");
             return false;
         }
 
@@ -85,8 +103,71 @@ internal sealed class MonsterNavigator(
         targetSearchAttempts = 0;
         nextTargetSearchAt = DateTime.MinValue;
         nextTargetRepathAt = DateTime.MinValue;
+        lastMountAttemptAt = DateTime.MinValue;
+        lastDismountAttemptAt = DateTime.MinValue;
+        mountAttemptedForCluster = false;
         State = MonsterNavigationState.Idle;
         StatusText = "Idle";
+    }
+
+    private IReadOnlyList<MonsterLocation> FilterValidRouteCandidates(IReadOnlyList<MonsterLocation> locations, out string? validationSummary)
+    {
+        var validLocations = new List<MonsterLocation>();
+        var lastError = "no candidates were provided";
+        var checkedCount = 0;
+
+        foreach (var location in locations)
+        {
+            checkedCount++;
+            if (!ValidateLocation(location, out var error))
+            {
+                lastError = error;
+                continue;
+            }
+
+            validLocations.Add(location);
+        }
+
+        validationSummary = validLocations.Count == 0
+            ? $"No valid route candidates. Checked {checkedCount} candidate(s). Last error: {lastError}."
+            : null;
+        return validLocations;
+    }
+
+    private static bool ValidateLocation(MonsterLocation location, out string error)
+    {
+        if (string.IsNullOrWhiteSpace(location.MobName))
+        {
+            error = "candidate has no mob name";
+            return false;
+        }
+
+        if (location.TerritoryTypeId == 0)
+        {
+            error = $"{location.MobName} has no valid territory.";
+            return false;
+        }
+
+        if (location.MapRowId == 0)
+        {
+            error = $"{location.MobName} has no valid map.";
+            return false;
+        }
+
+        if (location.BNpcNameId is 0)
+        {
+            error = $"{location.MobName} has invalid BNpcNameId 0.";
+            return false;
+        }
+
+        if (!IsLikelyMapCoordinate(location.MapX) || !IsLikelyMapCoordinate(location.MapY))
+        {
+            error = $"{location.MobName} has invalid coordinates: X={location.MapX:F1}, Y={location.MapY:F1}.";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     public void Update()
@@ -159,37 +240,42 @@ internal sealed class MonsterNavigator(
                 patrolIndex = 0;
 
             target = patrolLocations[patrolIndex];
-            route = planner.ResolveRoute(target);
-            if (route == null)
+            if (!planner.TryResolveRoute(target, out route, out var routeError))
             {
+                LastRouteStartError = routeError;
                 patrolIndex++;
                 continue;
             }
 
             acquiredTarget = null;
             teleportAttempted = false;
+            mountAttemptedForCluster = false;
             targetSearchAttempts = 0;
             nextTargetSearchAt = DateTime.MinValue;
             nextTargetRepathAt = DateTime.MinValue;
-            State = services.ClientState.TerritoryType == route.TerritoryTypeId
+            State = services.ClientState.TerritoryType == route!.TerritoryTypeId
                 ? MonsterNavigationState.WaitingForZoneLoad
                 : MonsterNavigationState.Teleporting;
             stateStartedAt = DateTime.UtcNow;
             StatusText = State == MonsterNavigationState.Teleporting
                 ? $"Teleporting to {route.AetheryteName} for cluster {patrolIndex + 1}/{patrolLocations.Count}"
                 : $"Preparing cluster {patrolIndex + 1}/{patrolLocations.Count}";
+            LastRouteStartError = null;
             return true;
         }
 
         target = null;
         route = null;
         State = MonsterNavigationState.Failed;
-        StatusText = "No usable route/aetheryte found for any monster cluster.";
+        LastRouteStartError = $"No usable route/aetheryte found for any monster cluster. Checked {patrolLocations.Count} candidate(s). Last error: {LastRouteStartError ?? "none"}.";
+        StatusText = LastRouteStartError;
+        services.Log.Warning($"Monster route start failed: {LastRouteStartError}");
         return false;
     }
 
     private void AdvanceToNextPatrolLocation(string reason)
     {
+        services.Log.Warning($"Monster route attempt skipped: {reason}");
         patrolIndex++;
         if (patrolIndex >= patrolLocations.Count)
             patrolIndex = 0;
@@ -241,6 +327,9 @@ internal sealed class MonsterNavigator(
         if ((DateTime.UtcNow - stateStartedAt).TotalSeconds < ZoneLoadWaitSeconds)
             return;
 
+        if (!EnsureDismountedBeforeTargeting())
+            return;
+
         if (TryAcquireVisibleTarget(false))
             return;
 
@@ -250,17 +339,37 @@ internal sealed class MonsterNavigator(
     private void StartVnavmeshNavigation()
     {
         vnavmesh.RefreshAvailability();
-        if (!vnavmesh.Available || !vnavmesh.IsReady())
+        if (!vnavmesh.Available)
         {
             State = MonsterNavigationState.Failed;
-            StatusText = $"vnavmesh unavailable: {vnavmesh.LastError ?? "navmesh not ready"}";
+            LastRouteStartError = $"Cannot route to {target!.MobName}: vnavmesh is unavailable ({vnavmesh.LastError ?? "IPC providers missing"}).";
+            StatusText = LastRouteStartError;
+            services.Log.Warning($"Monster route start failed: {LastRouteStartError}");
             return;
         }
 
-        var destination = vnavmesh.NearestPoint(route!.Destination) ?? route.Destination;
-        if (!vnavmesh.PathfindAndMoveCloseTo(destination, ArrivalDistance))
+        if (!vnavmesh.IsReady())
         {
-            AdvanceToNextPatrolLocation($"Failed to start movement to cluster {patrolIndex + 1}/{patrolLocations.Count}: {vnavmesh.LastError ?? "unknown error"}");
+            State = MonsterNavigationState.Failed;
+            LastRouteStartError = $"Cannot route to {target!.MobName}: vnavmesh is not ready; open navmesh or wait for it to load.";
+            StatusText = LastRouteStartError;
+            services.Log.Warning($"Monster route start failed: {LastRouteStartError}");
+            return;
+        }
+
+        if (!PrepareMountForRouteMovement())
+            return;
+
+        var destination = vnavmesh.NearestPoint(route!.Destination);
+        if (destination == null)
+        {
+            AdvanceToNextPatrolLocation($"vnavmesh path request failed for {target!.MobName}: {vnavmesh.LastError ?? "could not find nearest mesh point"}");
+            return;
+        }
+
+        if (!vnavmesh.PathfindAndMoveCloseTo(destination.Value, ArrivalDistance))
+        {
+            AdvanceToNextPatrolLocation($"vnavmesh move command failed for {target!.MobName}: {vnavmesh.LastError ?? "PathfindAndMoveCloseTo returned no detail"}");
             return;
         }
 
@@ -311,6 +420,9 @@ internal sealed class MonsterNavigator(
     private void HandleArrival()
     {
         vnavmesh.Stop();
+        if (!EnsureDismountedBeforeTargeting())
+            return;
+
         if (TryAcquireVisibleTarget(true))
             return;
 
@@ -339,6 +451,9 @@ internal sealed class MonsterNavigator(
             return;
 
         targetSearchAttempts++;
+        if (!EnsureDismountedBeforeTargeting())
+            return;
+
         if (TryAcquireVisibleTarget(true))
             return;
 
@@ -398,6 +513,9 @@ internal sealed class MonsterNavigator(
 
     private bool TryAcquireVisibleTarget(bool restrictToCurrentCluster)
     {
+        if (!EnsureDismountedBeforeTargeting())
+            return false;
+
         var match = FindVisibleHuntedTarget(restrictToCurrentCluster);
         if (match == null)
             return false;
@@ -419,20 +537,41 @@ internal sealed class MonsterNavigator(
         if (acquiredTarget == null)
             return;
 
+        if (!EnsureDismountedBeforeTargeting())
+            return;
+
         vnavmesh.RefreshAvailability();
-        if (!vnavmesh.Available || !vnavmesh.IsReady())
+        if (!vnavmesh.Available)
         {
             State = MonsterNavigationState.Failed;
-            StatusText = $"vnavmesh unavailable while moving to target: {vnavmesh.LastError ?? "navmesh not ready"}";
+            StatusText = $"Cannot route to {acquiredTarget.Name}: vnavmesh is unavailable ({vnavmesh.LastError ?? "IPC providers missing"}).";
+            services.Log.Warning($"Monster target movement failed: {StatusText}");
+            return;
+        }
+
+        if (!vnavmesh.IsReady())
+        {
+            State = MonsterNavigationState.Failed;
+            StatusText = $"Cannot route to {acquiredTarget.Name}: vnavmesh is not ready; open navmesh or wait for it to load.";
+            services.Log.Warning($"Monster target movement failed: {StatusText}");
             return;
         }
 
         var stopDistance = GetCombatStopDistance(acquiredTarget);
-        var destination = vnavmesh.NearestPoint(acquiredTarget.Position, 6f, 12f) ?? acquiredTarget.Position;
-        if (!vnavmesh.PathfindAndMoveCloseTo(destination, stopDistance))
+        var destination = vnavmesh.NearestPoint(acquiredTarget.Position, 6f, 12f);
+        if (destination == null)
         {
             State = MonsterNavigationState.Failed;
-            StatusText = $"Failed to move to {acquiredTarget.Name}: {vnavmesh.LastError ?? "unknown error"}";
+            StatusText = $"Cannot route to {acquiredTarget.Name}: {vnavmesh.LastError ?? "failed to find nearest mesh point near target"}.";
+            services.Log.Warning($"Monster target movement failed: {StatusText}");
+            return;
+        }
+
+        if (!vnavmesh.PathfindAndMoveCloseTo(destination.Value, stopDistance))
+        {
+            State = MonsterNavigationState.Failed;
+            StatusText = $"vnavmesh move command failed for {acquiredTarget.Name}: {vnavmesh.LastError ?? "PathfindAndMoveCloseTo returned no detail"}.";
+            services.Log.Warning($"Monster target movement failed: {StatusText}");
             return;
         }
 
@@ -443,6 +582,13 @@ internal sealed class MonsterNavigator(
 
     private void CompleteArrivalWithTarget()
     {
+        if (mountService.IsMounted)
+        {
+            State = MonsterNavigationState.Failed;
+            StatusText = "Cannot start combat while mounted; dismount before attacking.";
+            return;
+        }
+
         var driverReady = rotationDriver.PrepareForCombat();
         State = MonsterNavigationState.Arrived;
         StatusText = driverReady
@@ -488,4 +634,71 @@ internal sealed class MonsterNavigator(
 
     private bool IsBetweenAreas() =>
         services.Condition[ConditionFlag.BetweenAreas] || services.Condition[ConditionFlag.BetweenAreas51];
+
+    private static bool IsLikelyMapCoordinate(float value) => value is > 0f and < 50f;
+
+    private bool PrepareMountForRouteMovement()
+    {
+        var player = services.Objects.LocalPlayer;
+        if (player == null || route == null || mountService.IsMounted)
+            return true;
+
+        var distance = Vector3.Distance(player.Position, route.Destination);
+        if (!mountService.CanAttemptMount(distance, out var reason))
+        {
+            if (config.AutoMountEnabled && distance >= Math.Clamp(config.AutoMountMinDistance, 1f, 500f) && !mountAttemptedForCluster)
+            {
+                mountAttemptedForCluster = true;
+                mountService.RecordMountSkipped(reason);
+                StatusText = $"Mount unavailable: {reason}; continuing on foot.";
+            }
+
+            return true;
+        }
+
+        if (mountAttemptedForCluster)
+        {
+            if ((DateTime.UtcNow - lastMountAttemptAt).TotalSeconds < MountWaitSeconds)
+            {
+                StatusText = $"Waiting for mount before moving to {target!.MobName}.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if ((DateTime.UtcNow - lastMountAttemptAt).TotalSeconds < MountCommandCooldownSeconds)
+            return true;
+
+        mountAttemptedForCluster = true;
+        lastMountAttemptAt = DateTime.UtcNow;
+        var result = mountService.TryMountRoulette(distance);
+        StatusText = result.Success
+            ? $"Mounting with Mount Roulette before moving to {target!.MobName}."
+            : $"{result.Status} Continuing on foot.";
+        return !result.Success;
+    }
+
+    private bool EnsureDismountedBeforeTargeting()
+    {
+        if (!mountService.IsMounted)
+            return true;
+
+        if ((DateTime.UtcNow - lastDismountAttemptAt).TotalSeconds < DismountCommandCooldownSeconds)
+        {
+            StatusText = "Cannot start combat while mounted; waiting to dismount.";
+            return false;
+        }
+
+        lastDismountAttemptAt = DateTime.UtcNow;
+        var result = mountService.TryDismount();
+        StatusText = result.Status;
+        if (!result.Success && result.IsFatal)
+        {
+            State = MonsterNavigationState.Failed;
+            services.Log.Warning($"Monster dismount failed: {result.Status}");
+        }
+
+        return !mountService.IsMounted && result.Success;
+    }
 }

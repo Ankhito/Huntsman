@@ -20,7 +20,7 @@ internal abstract class IpcAdapterBase(PluginServices services, ThrottledLogger 
         catch (Exception ex)
         {
             Available = false;
-            LastError = ex.Message;
+            LastError = ex.GetBaseException().Message;
         }
     }
 
@@ -35,8 +35,8 @@ internal abstract class IpcAdapterBase(PluginServices services, ThrottledLogger 
         catch (Exception ex)
         {
             value = default;
-            LastError = ex.Message;
-            Logger.Warning($"{GetType().Name}:{operation}", $"{GetType().Name} {operation} failed: {ex.Message}");
+            LastError = ex.GetBaseException().Message;
+            Logger.Warning($"{GetType().Name}:{operation}", $"{GetType().Name} {operation} failed: {LastError}");
             return false;
         }
     }
@@ -51,8 +51,8 @@ internal abstract class IpcAdapterBase(PluginServices services, ThrottledLogger 
         }
         catch (Exception ex)
         {
-            LastError = ex.Message;
-            Logger.Warning($"{GetType().Name}:{operation}", $"{GetType().Name} {operation} failed: {ex.Message}");
+            LastError = ex.GetBaseException().Message;
+            Logger.Warning($"{GetType().Name}:{operation}", $"{GetType().Name} {operation} failed: {LastError}");
             return false;
         }
     }
