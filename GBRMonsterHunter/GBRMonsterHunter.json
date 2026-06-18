@@ -1,11 +1,11 @@
 {
-  "Author": "SekhmetAnkh",
+  "Author": "Ankhito",
   "Name": "GBR Monster Hunter",
   "InternalName": "GBRMonsterHunter",
   "Description": "Listens to GatherBuddy Reborn/Vulcan execution plans, detects missing drop-only materials using Vulcan/GatherBuddy mob-drop locations with local fallbacks, waits for GBR gathering to finish, equips a selected combat job, routes to the hunted monster, coordinates with RotationSolverReborn or checks WrathCombo readiness, and resumes Vulcan only when GBR Monster Hunter owns the pause.",
   "Punchline": "Route to drop-only materials from crafting plans.",
   "ApplicableVersion": "any",
-  "RepoUrl": "https://github.com/SekhmetAnkh/GBRMonsterHunter",
+  "RepoUrl": "https://github.com/Ankhito/GBRMonsterHunter",
   "Tags": [
     "gathering",
     "crafting",
