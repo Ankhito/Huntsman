@@ -8,14 +8,16 @@ namespace GBRMonsterHunter.UI;
 
 internal sealed class MainWindow
 {
-    private static readonly Vector4 Bg = new(0.08f, 0.09f, 0.11f, 1f);
-    private static readonly Vector4 CardBg = new(0.12f, 0.13f, 0.16f, 1f);
-    private static readonly Vector4 CardBgSoft = new(0.16f, 0.17f, 0.20f, 1f);
-    private static readonly Vector4 Accent = new(0.25f, 0.72f, 0.68f, 1f);
-    private static readonly Vector4 AccentSoft = new(0.31f, 0.55f, 0.86f, 1f);
-    private static readonly Vector4 Warn = new(0.95f, 0.66f, 0.30f, 1f);
-    private static readonly Vector4 Error = new(0.92f, 0.32f, 0.34f, 1f);
-    private static readonly Vector4 TextDim = new(0.62f, 0.66f, 0.72f, 1f);
+    private static readonly Vector4 Bg = new(0.055f, 0.050f, 0.045f, 0.96f);
+    private static readonly Vector4 CardBg = new(0.095f, 0.085f, 0.070f, 1f);
+    private static readonly Vector4 CardBgSoft = new(0.130f, 0.115f, 0.090f, 1f);
+    private static readonly Vector4 Accent = new(1.00f, 0.76f, 0.24f, 1f);
+    private static readonly Vector4 AccentSoft = new(0.85f, 0.58f, 0.18f, 1f);
+    private static readonly Vector4 Success = new(0.36f, 0.82f, 0.45f, 1f);
+    private static readonly Vector4 Warn = Accent;
+    private static readonly Vector4 Error = new(0.96f, 0.42f, 0.42f, 1f);
+    private static readonly Vector4 Text = new(0.95f, 0.93f, 0.88f, 1f);
+    private static readonly Vector4 TextDim = new(0.62f, 0.58f, 0.50f, 1f);
     private const int MaxManualQuantity = 9999;
     private const int MaxSearchResults = 50;
 
@@ -110,7 +112,7 @@ internal sealed class MainWindow
             return;
 
         var open = IsOpen;
-        ImGui.SetNextWindowSize(new Vector2(740, 560), ImGuiCond.FirstUseEver);
+        ImGui.SetNextWindowSize(new Vector2(780, 640), ImGuiCond.FirstUseEver);
         PushWindowStyle();
         if (!ImGui.Begin("GBR Monster Hunter", ref open))
         {
@@ -145,17 +147,17 @@ internal sealed class MainWindow
         {
             ImGui.TextColored(accent, failed ? "Attention" : active ? "Hunting" : "Standing by");
             ImGui.SameLine();
-            ImGui.TextUnformatted("GBR Monster Hunter");
+            ImGui.TextColored(Text, "GBR Monster Hunter");
             ImGui.TextColored(TextDim, "Standalone drop-material routing using local game data.");
 
             ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 6);
             DrawPill(automation.HasActiveDropWork ? "Drop Hunt Active" : "No Active Hunt", active ? Accent : TextDim);
             ImGui.SameLine();
-            DrawPill(dropLocations.LocalDataAvailable ? "Local Drops Ready" : "Local Drops Missing", dropLocations.LocalDataAvailable ? Accent : Error);
+            DrawPill(dropLocations.LocalDataAvailable ? "Local Drops Ready" : "Local Drops Missing", dropLocations.LocalDataAvailable ? Success : Error);
             ImGui.SameLine();
             DrawPill(monsterNavigator.State.ToString(), failed ? Error : AccentSoft);
             ImGui.SameLine();
-            DrawPill(rotationDriver.Available ? $"{rotationDriver.DriverName} Ready" : "Combat Driver Missing", rotationDriver.Available ? Accent : Warn);
+            DrawPill(rotationDriver.Available ? $"{rotationDriver.DriverName} Ready" : "Combat Driver Missing", rotationDriver.Available ? Success : Warn);
         }
     }
 
@@ -171,7 +173,7 @@ internal sealed class MainWindow
         using (BeginCard("##plan-card", new Vector2(cardW, 112), automation.HasActiveDropWork ? Accent : TextDim))
             DrawMetric("Plan Source", dropHuntList.Enabled ? dropHuntList.Name : automation.CurrentPlanName, automation.QueueState);
         ImGui.SameLine();
-        using (BeginCard("##target-card", new Vector2(cardW, 112), active?.HasRoute == true ? Accent : Warn))
+        using (BeginCard("##target-card", new Vector2(cardW, 112), active?.HasRoute == true ? Success : Warn))
             DrawMetric("Drop Target", active?.ItemName ?? "None", active == null ? dropHuntList.StatusText : $"{active.Missing} remaining");
         ImGui.SameLine();
         using (BeginCard("##nav-card", new Vector2(cardW, 112), monsterNavigator.State == MonsterNavigationState.Failed ? Error : AccentSoft))
@@ -197,7 +199,7 @@ internal sealed class MainWindow
             DrawPill(gbr.Available ? "Optional GBR Available" : "Optional GBR Missing", gbr.Available ? Accent : Warn);
         }
 
-        using (BeginCard("##active-target", new Vector2(-1, 150), active?.HasRoute == true ? Accent : Warn))
+        using (BeginCard("##active-target", new Vector2(-1, 150), active?.HasRoute == true ? Success : Warn))
         {
             DrawSectionTitle("Active Drop Target");
             if (active == null)
@@ -245,14 +247,14 @@ internal sealed class MainWindow
         {
             DrawSectionTitle("Navigation Tuning");
             var autoMountEnabled = config.AutoMountEnabled;
-            if (ImGui.Checkbox("Auto-mount between route points", ref autoMountEnabled))
+            if (DrawToggleSetting("Auto-mount between route points", "Attempts Mount Roulette before longer cluster routes.", ref autoMountEnabled))
             {
                 config.AutoMountEnabled = autoMountEnabled;
                 config.Save();
             }
 
             var autoDismountBeforeCombat = config.AutoDismountBeforeCombat;
-            if (ImGui.Checkbox("Auto-dismount before combat", ref autoDismountBeforeCombat))
+            if (DrawToggleSetting("Auto-dismount before combat", "Dismounts before search, target acquisition, and combat handoff.", ref autoDismountBeforeCombat))
             {
                 config.AutoDismountBeforeCombat = autoDismountBeforeCombat;
                 config.Save();
@@ -400,17 +402,17 @@ internal sealed class MainWindow
 
     private void DrawDependencyPills()
     {
-        DrawPill("Local data", dropLocations.LocalDataAvailable ? Accent : Error);
+        DrawPill("Local data", dropLocations.LocalDataAvailable ? Success : Error);
         ImGui.SameLine();
-        DrawPill("Vulcan optional", string.IsNullOrWhiteSpace(automation.VulcanListenerError) ? Accent : Warn);
+        DrawPill("Vulcan optional", string.IsNullOrWhiteSpace(automation.VulcanListenerError) ? Success : Warn);
         ImGui.SameLine();
-        DrawPill("GBR optional", gbr.Available ? Accent : Warn);
+        DrawPill("GBR optional", gbr.Available ? Success : Warn);
         ImGui.SameLine();
-        DrawPill("Lifestream", lifestream.Available ? Accent : Warn);
+        DrawPill("Lifestream", lifestream.Available ? Success : Warn);
         ImGui.SameLine();
         DrawPill("vnavmesh", vnavmesh.Available ? Accent : Error);
         ImGui.SameLine();
-        DrawPill(rotationDriver.DriverName, rotationDriver.Available ? Accent : Warn);
+        DrawPill(rotationDriver.DriverName, rotationDriver.Available ? Success : Warn);
     }
 
     private void DrawManualHuntCard()
@@ -434,10 +436,10 @@ internal sealed class MainWindow
             RefreshManualSearchResults(force: false);
             DrawManualSearchResults();
 
-            if (ImGui.Button("Add Item"))
+            if (DrawGoldButton("Add Item"))
                 AddSelectedManualItem();
             ImGui.SameLine();
-            if (ImGui.Button("Start Hunt"))
+            if (DrawGoldButton("Start Hunt"))
                 StartManualHunt();
             ImGui.SameLine();
             if (ImGui.Button("Clear"))
@@ -449,7 +451,7 @@ internal sealed class MainWindow
             if (ImGui.CollapsingHeader("Text input fallback"))
             {
                 ImGui.InputTextMultiline("##manual-request-input", ref manualRequestInput, 2048, new Vector2(-1, 44));
-                if (ImGui.Button("Generate From Text"))
+                if (DrawGoldButton("Generate From Text"))
                     GenerateManualDropHunt();
             }
         }
@@ -638,7 +640,7 @@ internal sealed class MainWindow
 
     private static void DrawSectionTitle(string label)
     {
-        ImGui.TextColored(TextDim, label.ToUpperInvariant());
+        ImGui.TextColored(Accent, label.ToUpperInvariant());
         ImGui.Separator();
     }
 
@@ -646,7 +648,9 @@ internal sealed class MainWindow
     {
         ImGui.TextColored(TextDim, label);
         ImGui.SameLine(180);
+        ImGui.PushStyleColor(ImGuiCol.Text, Text);
         ImGui.TextWrapped(value);
+        ImGui.PopStyleColor();
     }
 
     private static void DrawPill(string label, Vector4 color)
@@ -654,8 +658,8 @@ internal sealed class MainWindow
         var pad = new Vector2(9, 4);
         var pos = ImGui.GetCursorScreenPos();
         var size = ImGui.CalcTextSize(label) + pad * 2;
-        ImGui.GetWindowDrawList().AddRectFilled(pos, pos + size, ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.18f)), 6f);
-        ImGui.GetWindowDrawList().AddRect(pos, pos + size, ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.55f)), 6f);
+        ImGui.GetWindowDrawList().AddRectFilled(pos, pos + size, ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.16f)), 999f);
+        ImGui.GetWindowDrawList().AddRect(pos, pos + size, ImGui.GetColorU32(new Vector4(color.X, color.Y, color.Z, 0.58f)), 999f);
         ImGui.SetCursorScreenPos(pos + pad);
         ImGui.TextColored(color, label);
         ImGui.SetCursorScreenPos(new Vector2(pos.X + size.X, pos.Y));
@@ -673,6 +677,57 @@ internal sealed class MainWindow
 
         DrawTooltip(tooltip);
         return false;
+    }
+
+    private static bool DrawToggleSetting(string label, string tooltip, ref bool value)
+    {
+        var changed = ToggleSwitch($"##{label}", ref value);
+        ImGui.SameLine();
+        ImGui.TextColored(Text, label);
+        DrawTooltip(tooltip);
+        return changed;
+    }
+
+    private static bool ToggleSwitch(string id, ref bool value)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var frame = ImGui.GetFrameHeight();
+        var height = frame * 0.82f;
+        var width = height * 1.85f;
+        var radius = height * 0.5f;
+        var origin = ImGui.GetCursorScreenPos();
+
+        ImGui.InvisibleButton(id, new Vector2(width, frame));
+        var changed = false;
+        if (ImGui.IsItemClicked())
+        {
+            value = !value;
+            changed = true;
+        }
+
+        var hovered = ImGui.IsItemHovered();
+        var yOffset = (frame - height) * 0.5f;
+        var p0 = new Vector2(origin.X, origin.Y + yOffset);
+        var p1 = new Vector2(origin.X + width, origin.Y + yOffset + height);
+        var bg = value
+            ? new Vector4(Accent.X, Accent.Y, Accent.Z, hovered ? 0.95f : 0.82f)
+            : new Vector4(0.24f, 0.22f, 0.18f, hovered ? 1f : 0.9f);
+
+        draw.AddRectFilled(p0, p1, ImGui.GetColorU32(bg), radius);
+        draw.AddRect(p0, p1, ImGui.GetColorU32(new Vector4(Accent.X, Accent.Y, Accent.Z, value ? 0.50f : 0.20f)), radius);
+        var cx = value ? p1.X - radius : p0.X + radius;
+        draw.AddCircleFilled(new Vector2(cx, p0.Y + radius), radius - 2f, ImGui.GetColorU32(Text), 24);
+        return changed;
+    }
+
+    private static bool DrawGoldButton(string label)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.26f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.42f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.62f));
+        var clicked = ImGui.Button(label);
+        ImGui.PopStyleColor(3);
+        return clicked;
     }
 
     private static bool DrawDoubleSetting(string label, string tooltip, ref double value, float speed, double min, double max)
@@ -718,23 +773,40 @@ internal sealed class MainWindow
 
     private static void PushWindowStyle()
     {
-        ImGui.PushStyleColor(ImGuiCol.WindowBg, Bg);
-        ImGui.PushStyleColor(ImGuiCol.Tab, CardBg);
-        ImGui.PushStyleColor(ImGuiCol.TabHovered, CardBgSoft);
-        ImGui.PushStyleColor(ImGuiCol.TabActive, CardBgSoft);
-        ImGui.PushStyleColor(ImGuiCol.FrameBg, CardBgSoft);
-        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.20f, 0.22f, 0.26f, 1f));
-        ImGui.PushStyleColor(ImGuiCol.Button, CardBgSoft);
-        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.20f, 0.28f, 0.32f, 1f));
-        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 8f);
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 9f);
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8f);
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
+        ImGui.PushStyleVar(ImGuiStyleVar.PopupRounding, 6f);
+        ImGui.PushStyleVar(ImGuiStyleVar.GrabRounding, 5f);
+        ImGui.PushStyleVar(ImGuiStyleVar.TabRounding, 6f);
+        ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarRounding, 8f);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(8f, 5f));
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, Bg);
+        ImGui.PushStyleColor(ImGuiCol.Text, Text);
+        ImGui.PushStyleColor(ImGuiCol.TextDisabled, TextDim);
+        ImGui.PushStyleColor(ImGuiCol.Border, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.22f));
+        ImGui.PushStyleColor(ImGuiCol.Separator, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.22f));
+        ImGui.PushStyleColor(ImGuiCol.Tab, CardBg);
+        ImGui.PushStyleColor(ImGuiCol.TabHovered, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.28f));
+        ImGui.PushStyleColor(ImGuiCol.TabActive, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.20f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBg, CardBgSoft);
+        ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.20f, 0.17f, 0.12f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.26f, 0.21f, 0.13f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Button, CardBgSoft);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.26f, 0.20f, 0.12f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.36f, 0.27f, 0.13f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.Header, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.16f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.26f));
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, new Vector4(Accent.X, Accent.Y, Accent.Z, 0.38f));
+        ImGui.PushStyleColor(ImGuiCol.CheckMark, Accent);
+        ImGui.PushStyleColor(ImGuiCol.SliderGrab, AccentSoft);
+        ImGui.PushStyleColor(ImGuiCol.SliderGrabActive, Accent);
     }
 
     private static void PopWindowStyle()
     {
-        ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(8);
+        ImGui.PopStyleColor(20);
+        ImGui.PopStyleVar(8);
     }
 
     private static string GetRotationDriverLabel(RotationDriverKind driver) => driver switch
