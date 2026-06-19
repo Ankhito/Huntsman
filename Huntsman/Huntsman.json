@@ -1,0 +1,16 @@
+{
+  "Author": "Ankhito",
+  "Name": "Huntsman",
+  "InternalName": "Huntsman",
+  "Description": "Standalone monster-drop hunting and routing using local LuminaSupplemental data, manual hunt lists, vnavmesh navigation, mount support, and configurable combat handoff.",
+  "Punchline": "Search, route, and hunt drop-only materials.",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/Ankhito/Huntsman",
+  "Tags": [
+    "gathering",
+    "crafting",
+    "materials",
+    "navigation",
+    "combat"
+  ]
+}

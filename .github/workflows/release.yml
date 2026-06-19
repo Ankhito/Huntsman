@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  SEKHMETPLUGINS_DISPATCH_TOKEN: ${{ secrets.SEKHMETPLUGINS_DISPATCH_TOKEN }}
+  ANKHITOPLUGINS_DISPATCH_TOKEN: ${{ secrets.ANKHITOPLUGINS_DISPATCH_TOKEN || secrets.SEKHMETPLUGINS_DISPATCH_TOKEN }}
 
 jobs:
   build-release:
@@ -25,7 +25,7 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore GBRMonsterHunter.slnx
+        run: dotnet restore Huntsman.slnx
 
       - name: Install Dalamud dev files
         shell: pwsh
@@ -36,17 +36,19 @@ jobs:
           Expand-Archive "$env:RUNNER_TEMP/dalamud.zip" -DestinationPath $hooks -Force
 
       - name: Build plugin package
-        run: dotnet build GBRMonsterHunter/GBRMonsterHunter.csproj --configuration Release --no-restore
+        run: dotnet build Huntsman/Huntsman.csproj --configuration Release --no-restore
 
       - name: Locate Dalamud package
         id: package
         shell: pwsh
         run: |
-          $zip = Get-ChildItem -Path GBRMonsterHunter -Recurse -Filter latest.zip | Select-Object -First 1
+          $zip = Get-ChildItem -Path Huntsman/bin/Release -Recurse -Filter latest.zip |
+            Where-Object { $_.FullName -match '[\\/]Huntsman[\\/]latest\.zip$' } |
+            Select-Object -First 1
           if (-not $zip) {
             throw "DalamudPackager did not produce latest.zip"
           }
-          $asset = Join-Path $env:RUNNER_TEMP "GBRMonsterHunter-latest.zip"
+          $asset = Join-Path $env:RUNNER_TEMP "Huntsman-latest.zip"
           Copy-Item $zip.FullName $asset -Force
           "zip=$asset" >> $env:GITHUB_OUTPUT
 
@@ -54,17 +56,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.zip }}
-          name: GBRMonsterHunter ${{ github.ref_name }}
+          name: Huntsman ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
           target_commitish: ${{ github.sha }}
           overwrite_files: true
           make_latest: true
 
       - name: Dispatch pluginmaster update
-        if: ${{ env.SEKHMETPLUGINS_DISPATCH_TOKEN != '' }}
+        if: ${{ env.ANKHITOPLUGINS_DISPATCH_TOKEN != '' }}
         shell: pwsh
         env:
-          GH_TOKEN: ${{ env.SEKHMETPLUGINS_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ env.ANKHITOPLUGINS_DISPATCH_TOKEN }}
         run: |
           $payload = @{
             event_type = "update-pluginmaster"
@@ -74,4 +76,4 @@ jobs:
             }
           } | ConvertTo-Json -Compress
 
-          $payload | gh api repos/Ankhito/SekhmetPlugins/dispatches --method POST --input -
+          $payload | gh api repos/Ankhito/AnkhitoPlugins/dispatches --method POST --input -
