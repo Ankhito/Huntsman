@@ -103,6 +103,7 @@ jobs:
           make_latest: true
 
       - name: Dispatch pluginmaster update
+        continue-on-error: true
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
